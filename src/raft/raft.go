@@ -36,9 +36,9 @@ const (
 
 	None = -1
 
-	Leader State = iota
-	Candidate
-	Follower
+	Leader    State = iota // 4
+	Candidate              // 5
+	Follower               // 6
 )
 
 type State int
@@ -67,7 +67,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	state   State
-	term    uint64
+	term    int
 	voteFor int
 	votes   int
 
@@ -75,7 +75,7 @@ type Raft struct {
 	lastElection    time.Time
 	lastHeartbeat   time.Time
 
-	// log
+	log *Log
 	// tracker
 
 	applyCh chan<- ApplyMsg
@@ -86,7 +86,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (3A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return int(rf.term), !rf.killed() && rf.state == Leader
+	return rf.term, !rf.killed() && rf.state == Leader
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -127,11 +127,6 @@ func (rf *Raft) ticker() {
 
 		switch rf.state {
 		case Leader:
-			if !rf.selfAlive() {
-				rf.toFollower(rf.term)
-				break
-			}
-
 			if rf.shouldDoHeartbeat() {
 				rf.lastHeartbeat = time.Now()
 				rf.sendHeartbeat()
@@ -162,7 +157,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteFor = None
 	rf.votes = 0
 
-	// rf.log = newlog()
+	rf.initLog()
 	// rf.tracker = newtracker()
 	rf.applyCh = applyCh
 
@@ -171,6 +166,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.readPersist(persister.ReadRaftState())
 	}
 
+	rf.resetElectionTimer()
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	// go rf.commiter()
@@ -179,6 +175,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 func (rf *Raft) resetElectionTimer() {
+	// It is important to regenerate random electionTimeout after each election
 	ms := baseElectionTimeout + rand.Int63()%baseElectionTimeout
 	rf.electionTimeout = time.Duration(ms) * time.Millisecond
 	rf.lastElection = time.Now()
