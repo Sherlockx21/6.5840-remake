@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,12 +35,12 @@ const (
 
 	None = -1
 
-	Leader    State = iota // 4
-	Candidate              // 5
-	Follower               // 6
+	Leader    State = "Leader"
+	Candidate State = "Candidate"
+	Follower  State = "Follower"
 )
 
-type State int
+type State string
 
 type ApplyMsg struct {
 	CommandValid bool
@@ -71,22 +70,60 @@ type Raft struct {
 	voteFor int
 	votes   int
 
-	electionTimeout time.Duration
-	lastElection    time.Time
-	lastHeartbeat   time.Time
+	logs Logs
 
-	log *Log
-	// tracker
+	commitIndex int
+	lastApplied int
+
+	nextIndex  []int
+	matchIndex []int
+
+	electionTimer  *time.Timer
+	heartbeatTimer *time.Timer
 
 	applyCh chan<- ApplyMsg
 }
 
-// Use for test
+func Make(peers []*labrpc.ClientEnd, me int,
+	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	rf := &Raft{}
+	rf.peers = peers
+	rf.persister = persister
+	rf.me = me
+
+	// Your initialization code here (3A, 3B, 3C).
+	rf.state = Follower
+	rf.term = 0
+	rf.voteFor = None
+	rf.votes = 0
+
+	rf.initLogs()
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.applyCh = applyCh
+
+	// initialize from state persisted before a crash
+	if rf.persister.RaftStateSize() > 0 {
+		rf.readPersist(persister.ReadRaftState())
+	}
+
+	rf.electionTimer = time.NewTimer(randomElectionTimeout())
+	rf.heartbeatTimer = time.NewTimer(heartbeatInterval)
+
+	// start ticker goroutine to start elections
+	go rf.ticker()
+	// go rf.commiter()
+
+	return rf
+}
+
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (3A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.term, !rf.killed() && rf.state == Leader
+	return rf.term, rf.state == Leader
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -123,60 +160,17 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) ticker() {
 	for !rf.killed() {
-		rf.mu.Lock()
-
-		switch rf.state {
-		case Leader:
-			if rf.shouldDoHeartbeat() {
-				rf.lastHeartbeat = time.Now()
+		select {
+		case <-rf.electionTimer.C:
+			rf.mu.Lock()
+			rf.election()
+			rf.mu.Unlock()
+		case <-rf.heartbeatTimer.C:
+			rf.mu.Lock()
+			if rf.state == Leader {
 				rf.sendHeartbeat()
 			}
-
-		case Candidate, Follower:
-			if rf.shouldStartElection() {
-				rf.election()
-			}
+			rf.mu.Unlock()
 		}
-
-		rf.mu.Unlock()
-		time.Sleep(tickInterval)
 	}
-}
-
-// Create peer instance
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
-
-	// Your initialization code here (3A, 3B, 3C).
-	rf.state = Follower
-	rf.term = 0
-	rf.voteFor = None
-	rf.votes = 0
-
-	rf.initLog()
-	// rf.tracker = newtracker()
-	rf.applyCh = applyCh
-
-	// initialize from state persisted before a crash
-	if rf.persister.RaftStateSize() > 0 {
-		rf.readPersist(persister.ReadRaftState())
-	}
-
-	rf.resetElectionTimer()
-	// start ticker goroutine to start elections
-	go rf.ticker()
-	// go rf.commiter()
-
-	return rf
-}
-
-func (rf *Raft) resetElectionTimer() {
-	// It is important to regenerate random electionTimeout after each election
-	ms := baseElectionTimeout + rand.Int63()%baseElectionTimeout
-	rf.electionTimeout = time.Duration(ms) * time.Millisecond
-	rf.lastElection = time.Now()
 }
