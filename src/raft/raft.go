@@ -42,6 +42,12 @@ const (
 
 type State string
 
+type Entry struct {
+	Term    int
+	Index   int
+	Command interface{}
+}
+
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -70,7 +76,7 @@ type Raft struct {
 	voteFor int
 	votes   int
 
-	logs Logs
+	logs []Entry
 
 	commitIndex int
 	lastApplied int
@@ -81,7 +87,9 @@ type Raft struct {
 	electionTimer  *time.Timer
 	heartbeatTimer *time.Timer
 
-	applyCh chan<- ApplyMsg
+	applyCh       chan<- ApplyMsg
+	applyCond     *sync.Cond
+	replicateCond []*sync.Cond
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -97,12 +105,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteFor = None
 	rf.votes = 0
 
-	rf.initLogs()
+	rf.logs = make([]Entry, 1)
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+
 	rf.applyCh = applyCh
+	rf.replicateCond = make([]*sync.Cond, len(rf.peers))
 
 	// initialize from state persisted before a crash
 	if rf.persister.RaftStateSize() > 0 {
@@ -111,10 +122,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.electionTimer = time.NewTimer(randomElectionTimeout())
 	rf.heartbeatTimer = time.NewTimer(heartbeatInterval)
+	rf.applyCond = sync.NewCond(&rf.mu)
+
+	for peer := range rf.peers {
+		rf.nextIndex[peer], rf.matchIndex[peer] = rf.lastLog().Index+1, 0
+		if peer != me {
+			rf.replicateCond[peer] = sync.NewCond(&sync.Mutex{})
+			go rf.replicater(peer)
+		}
+	}
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-	// go rf.commiter()
+	go rf.applier()
 
 	return rf
 }
@@ -139,13 +159,28 @@ func (rf *Raft) GetState() (int, bool) {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
 	// Your code here (3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	return index, term, isLeader
+	if rf.state != Leader {
+		return -1, -1, false
+	}
+	newLogIndex := rf.lastLog().Index + 1
+	rf.logs = append(rf.logs, Entry{
+		Term:    rf.term,
+		Index:   newLogIndex,
+		Command: command,
+	})
+
+	rf.matchIndex[rf.me], rf.nextIndex[rf.me] = newLogIndex, newLogIndex+1
+	for i := range rf.peers {
+		if i != rf.me {
+			rf.replicateCond[i].Signal()
+		}
+	}
+
+	return newLogIndex, rf.term, true
 }
 
 func (rf *Raft) Kill() {
@@ -173,4 +208,55 @@ func (rf *Raft) ticker() {
 			rf.mu.Unlock()
 		}
 	}
+}
+
+func (rf *Raft) replicater(peer int) {
+	rf.replicateCond[peer].L.Lock()
+	defer rf.replicateCond[peer].L.Unlock()
+
+	for !rf.killed() {
+		for !rf.needReplicate(peer) {
+			rf.replicateCond[peer].Wait()
+		}
+
+		rf.replicate(peer)
+	}
+}
+
+func (rf *Raft) applier() {
+	for !rf.killed() {
+		rf.mu.Lock()
+
+		// if there are new committed entries, try apply
+		for rf.commitIndex <= rf.lastApplied {
+			rf.applyCond.Wait()
+		}
+
+		firstLogIndex, commitIndex, lastApplied := rf.firstLog().Index, rf.commitIndex, rf.lastApplied
+		entries := make([]Entry, commitIndex-lastApplied)
+		copy(entries, rf.logs[lastApplied-firstLogIndex+1:commitIndex-firstLogIndex+1])
+		DPrintf("%v apply %v", rf.me, entries)
+		rf.mu.Unlock()
+
+		for _, entry := range entries {
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: entry.Index,
+			}
+		}
+
+		rf.mu.Lock()
+		rf.lastApplied = commitIndex
+		rf.mu.Unlock()
+
+	}
+}
+
+func (rf *Raft) lastLog() Entry {
+	return rf.logs[len(rf.logs)-1]
+}
+
+func (rf *Raft) firstLog() Entry {
+	return rf.logs[0]
 }
