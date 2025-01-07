@@ -23,6 +23,7 @@ func (rf *Raft) toState(state State) {
 	case Candidate:
 		rf.term++
 		rf.voteFor = rf.me
+		rf.persist()
 		rf.votes = 1
 		rf.electionTimer.Reset(randomElectionTimeout())
 	case Leader:
@@ -61,6 +62,7 @@ func (rf *Raft) handleVoteReply(reply *RequestVoteReply) {
 	if reply.PeerTerm > rf.term {
 		rf.toState(Follower)
 		rf.term, rf.voteFor = reply.PeerTerm, None
+		rf.persist()
 		return
 	}
 
@@ -100,6 +102,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.CandidateTerm > rf.term {
 		rf.toState(Follower)
 		rf.term, rf.voteFor = args.CandidateTerm, None
+		rf.persist()
 		reply.PeerTerm = rf.term
 	}
 

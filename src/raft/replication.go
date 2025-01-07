@@ -61,6 +61,7 @@ func (rf *Raft) handleAppendEntriesReply(peer int, args *AppendEntriesArgs, repl
 		if reply.FollowerTerm > rf.term {
 			rf.toState(Follower)
 			rf.term, rf.voteFor = reply.FollowerTerm, None
+			rf.persist()
 		} else if reply.FollowerTerm == rf.term {
 			// prepare for the next send, nextIndex to send should be the first conflicted index
 			rf.nextIndex[peer] = reply.ConflictIndex
@@ -119,6 +120,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderTerm > rf.term {
 		rf.toState(Follower)
 		rf.term, rf.voteFor = args.LeaderTerm, None
+		rf.persist()
 	}
 
 	if args.PrevLogIndex < rf.firstLog().Index { // log at index not found in follower
@@ -145,6 +147,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for i, entry := range args.Entries {
 		if entry.Index-firstLogIndex >= len(rf.logs) || rf.logs[entry.Index-firstLogIndex].Term != entry.Term {
 			rf.logs = append(rf.logs[:entry.Index-firstLogIndex], args.Entries[i:]...)
+			rf.persist()
 			break
 		}
 	}
