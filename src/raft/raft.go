@@ -172,6 +172,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Index:   newLogIndex,
 		Command: command,
 	})
+	rf.persist()
 
 	rf.matchIndex[rf.me], rf.nextIndex[rf.me] = newLogIndex, newLogIndex+1
 	for i := range rf.peers {
