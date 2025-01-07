@@ -13,17 +13,17 @@ type RequestVoteReply struct {
 }
 
 type AppendEntriesArgs struct {
-	Leader        int
-	LeaderTerm    int
-	CommitedIndex int
-	PrevLogIndex  int
-	PrevLogTerm   int
-	Entries       []Entry
+	Leader       int
+	LeaderTerm   int
+	LeaderCommit int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []Entry
 }
 
 type AppendEntriesReply struct {
-	FollowerTerm       int
-	LastLogIndex       int
-	ConflictTerm       int
-	FirstConflictIndex int
+	FollowerTerm  int
+	Success       bool
+	ConflictTerm  int
+	ConflictIndex int
 }

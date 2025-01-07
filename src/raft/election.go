@@ -35,8 +35,8 @@ func (rf *Raft) genRequestVoteArgs() *RequestVoteArgs {
 	return &RequestVoteArgs{
 		Candidate:     rf.me,
 		CandidateTerm: rf.term,
-		LastLogIndex:  rf.logs.lastLog().Index,
-		LastLogTerm:   rf.logs.lastLog().Term,
+		LastLogIndex:  rf.lastLog().Index,
+		LastLogTerm:   rf.lastLog().Term,
 	}
 }
 
@@ -113,8 +113,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) isLogUptoDate(args *RequestVoteArgs) bool {
-	if args.LastLogTerm > rf.logs.lastLog().Term ||
-		(args.LastLogTerm == rf.logs.lastLog().Term && args.LastLogIndex >= rf.logs.lastLog().Index) {
+	if args.LastLogTerm > rf.lastLog().Term ||
+		(args.LastLogTerm == rf.lastLog().Term && args.LastLogIndex >= rf.lastLog().Index) {
 		return true
 	}
 	return false
